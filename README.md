@@ -52,12 +52,14 @@ A desktop workstation for analyzing facial action units from video and webcam us
 ## Installation
 
 Clone the repository:
+
 ```bash
 git clone https://github.com/testcom314/FACS.git
 cd FACS
 ```
 
 Create a virtual environment:
+
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
@@ -66,25 +68,29 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 Install dependencies:
 
 **For CPU:**
+
 ```bash
 pip install -r requirements-cpu.txt
 ```
 
 **For CUDA 13.0 (NVIDIA GPU):**
+
 ```bash
 pip install -r requirements-cuda130.txt
 ```
 
-Py-Feat will download pretrained models (~500 MB) on first run. Internet connection required for initial setup.
+Py-Feat will download pretrained models (~500 MB) on first run. Internet connection is required for initial setup.
 
 ## Quick Start
 
 Launch the application:
+
 ```bash
 python run.py
 ```
 
 The main window provides these tabs:
+
 - Quick View: Summary for current track
 - Overview: Emotion probabilities, state, events
 - FACS: All 20 AU values
@@ -97,117 +103,152 @@ The main window provides these tabs:
 
 ### Basic Workflow
 
-1. Select source (webcam or video file)
-2. Configure settings if needed (defaults work for most cases)
-3. Click "Start analysis"
-4. Results saved to `facs_output/session_YYYY-MM-DD_HH-MM-SS/`
-5. Open session for playback and review
+1. Select a source (webcam or video file).
+2. Configure settings if needed. The defaults work for most cases.
+3. Click **Start analysis**.
+4. Results are saved to `facs_output/session_YYYY-MM-DD_HH-MM-SS/`.
+5. Open a completed session for playback and review.
 
 ### Configuration
 
 Key settings are exposed in the Settings tab:
-- Face detection threshold: 0.30 (default)
-- AU activation threshold: 0.15 (default)
-- Detection interval: 1 (process every frame)
-- Smoothing factor: 0.35 (exponential smoothing)
 
-See [CONFIGURATION.md](CONFIGURATION.md) for complete parameter list.
+- Face detection threshold: `0.30` (default)
+- AU activation threshold: `0.15` (default)
+- Detection interval: `1` (process every frame)
+- Smoothing factor: `0.35` (exponential smoothing)
+
+See [CONFIGURATION.md](CONFIGURATION.md) for the complete parameter list.
 
 ## Session Output
 
 Each analysis creates a timestamped directory:
 
-```
+```text
 facs_output/session_YYYY-MM-DD_HH-MM-SS/
 ├── original.mp4              # Original video
 ├── tracked.mp4               # Annotated video with overlays
 ├── data.csv                  # Per-frame detector records
-├── data.json                 # Same as CSV, JSON format
+├── data.json                 # Per-frame records in JSON format
 ├── events.csv                # AU activations and rapid changes
 ├── episodes.csv              # Temporal AU events with rates
 ├── sequences.csv             # Clustered AU activity periods
 ├── coactivation.csv          # AU co-occurrence statistics
-├── transitions.csv           # Directed AU pairs
+├── transitions.csv           # Directed AU transitions
 ├── summary.json              # Session-level statistics
-├── temporal_summary.json     # Per-track temporal stats
+├── temporal_summary.json     # Per-track temporal statistics
 ├── session_info.json         # Configuration and metadata
 └── analysis.json             # Complete analysis in one file
 ```
 
-The primary file for analysis is `analysis.json`, which combines session info, frame data, events, and temporal analysis. Individual files are kept for inspection and compatibility.
+The primary file for analysis is `analysis.json`. It combines session information, frame data, events, and temporal analysis. Individual files are retained for inspection and compatibility.
 
 ## Documentation
 
 - [THEORY_AND_METHODS.md](THEORY_AND_METHODS.md) — What is measured and why; AU interpretation; measurement model
-- [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) — Implementation details, processing pipeline, architecture
+- [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) — Implementation details, processing pipeline, and architecture
 - [DATA_FORMAT.md](DATA_FORMAT.md) — CSV/JSON field reference and schema
 - [CONFIGURATION.md](CONFIGURATION.md) — Runtime parameters and tuning guide
 - [VALIDATION.md](VALIDATION.md) — Internal tests and external validation strategy
-- [DEVELOPMENT_HISTORY.md](DEVELOPMENT_HISTORY.md) — Design decisions and evolution
+- [DEVELOPMENT_HISTORY.md](DEVELOPMENT_HISTORY.md) — Design decisions and project evolution
 - [RESEARCH_NOTES.md](RESEARCH_NOTES.md) — Literature and references
 
 ## Measurement Model
 
 The application separates measurements into layers:
 
-**Raw Layer:** Detector outputs (20 AUs, 7 emotion probabilities, valence/arousal, pose, gaze, landmarks, mesh).
+**Raw Layer:** Detector outputs including 20 AUs, 7 emotion probabilities, valence/arousal, pose, gaze, landmarks, mesh, and available blendshapes.
 
-**Quality Layer:** Measurement conditions (face size, pose, confidence, gaze, tracking state). Pose affects AU estimate reliability; gaze is recorded separately.
+**Quality Layer:** Measurement conditions including face size, detector confidence, pose, gaze, visibility, and tracking state. Pose can affect AU estimate reliability, while gaze is recorded separately.
 
-**Temporal Layer:** AU episodes with onset, peak, offset, duration, amplitude, and rates. Same-frame activations are grouped; rates marked invalid for short intervals.
+**Temporal Layer:** AU episodes with onset, peak, offset, duration, amplitude, and rate information. Same-frame activations are grouped, and rates are marked invalid when the available interval is too short.
 
-**Derived Layer:** Smoothed values, normalized deviations, calibration adjustments, emotion ambiguity indicators.
+**Derived Layer:** Smoothed values, normalized deviations, calibration/reference measurements, and emotion ambiguity indicators.
 
-Raw detector values are always preserved. Later layers do not overwrite them.
+Raw detector values are preserved. Later processing layers do not overwrite them.
 
 ## Limitations
 
-- Detector accuracy inherits Py-Feat model limitations
-- Pose, lighting, and occlusion can degrade measurement quality
-- Visual tracking, not biometric identity (Track IDs represent continuity)
-- 7 emotion categories cannot represent every facial configuration
-- 30 FPS video is insufficient for microexpression research (requires 120+ FPS)
-- Coactivation counts are recording-dependent (duration, threshold, conditions)
-- No external validation against human FACS annotations
-- Cannot detect deception, classify genuine vs. posed expressions without validation, or establish mental states
+- Detector accuracy inherits the limitations of the Py-Feat model.
+- Pose, lighting, occlusion, and face visibility can degrade measurement quality.
+- Tracking is visual continuity tracking, not biometric identity. Track IDs represent continuity within an analysis session.
+- The seven emotion categories cannot represent every possible facial configuration.
+- Standard 30 FPS video provides relatively limited temporal resolution for microexpression research. High-speed datasets commonly use substantially higher frame rates.
+- Coactivation counts depend on recording duration, thresholds, and recording conditions.
+- No external validation against human FACS annotations is currently included.
+- The system cannot detect deception, determine whether an expression is genuine or posed without appropriate validation data, or establish a person's mental state.
 
-See [THEORY_AND_METHODS.md](THEORY_AND_METHODS.md) for detailed discussion.
+See [THEORY_AND_METHODS.md](THEORY_AND_METHODS.md) for a detailed discussion of these limitations.
 
 ## Validation
 
-Internal tests verify tracking stability, episode detection, hysteresis logic, and smoothing correctness. Run via **Settings > Run internal validation tests**.
+Internal tests verify application-level behavior including:
 
-External validation requires independently annotated datasets (DISFA for spontaneous AU intensity, CASME II/SAMM for high-speed microexpressions).
+- Tracking stability
+- Episode detection
+- Hysteresis logic
+- Same-frame AU grouping
+- Temporal sequence separation
+- Signal smoothing
+- Rate handling
+- Data-processing consistency
+
+Run the tests through **Settings > Run internal validation tests**.
+
+These tests validate the application's processing logic. They do not establish the accuracy of the underlying Py-Feat detector.
+
+External validation requires independently annotated datasets. Examples include DISFA for spontaneous facial action measurements and CASME II/SAMM for high-speed microexpression research.
 
 ## Architecture
 
-- `FACS_Level2.py` — GUI, detector adapter, tracking, temporal analysis, calibration, export, playback
-- `run.py` — Entry point
-- Single-module design prioritizes experimental iteration over refactoring
+- `FACS_Level2.py` — GUI, detector adapter, tracking, temporal analysis, calibration, measurement quality, export, and playback
+- `run.py` — Application entry point
+- Single-module design currently prioritizes experimental iteration over extensive refactoring
 
-Stack: PySide6 (GUI), PyTorch (inference), NumPy/Pandas (data), OpenCV (video), SciPy (signal processing).
+Stack:
+
+- PySide6 — GUI
+- PyTorch — model inference
+- Py-Feat — facial analysis
+- NumPy / Pandas — numerical and tabular data
+- OpenCV — video processing
+- SciPy — signal processing
 
 ## Contributing
 
-Improvements welcome. Priority areas:
-- Split monolithic module into focused submodules
-- Add pytest test suite for tracking and temporal algorithms
+Improvements are welcome. Current development areas include:
+
+- Split the monolithic module into focused submodules
+- Add a dedicated pytest test suite for tracking and temporal algorithms
 - Pin dependency versions
-- Add headless CLI and validation mode
-- External validation against DISFA
+- Add a headless CLI and validation mode
+- External validation against independently annotated datasets such as DISFA
+- Improve cross-video and cross-subject evaluation
+
+Contributions should preserve the distinction between raw detector measurements and derived analysis.
 
 ## License
 
-MIT License — See [LICENSE](LICENSE)
+MIT License
+
+Copyright (c) 2026 Adithya S
+
+See [LICENSE](LICENSE) for the complete license text.
 
 ## Citation
 
 Built on:
-- Py-Feat (https://py-feat.org) — Multi-task face detection
-- Facial Action Coding System (Ekman & Friesen) — AU taxonomy
-- PyTorch, OpenCV, NumPy, Pandas, SciPy
 
-Research informed by:
+- [Py-Feat](https://py-feat.org) — Multi-task facial analysis
+- Facial Action Coding System (Ekman & Friesen) — AU taxonomy
+- PyTorch
+- OpenCV
+- NumPy
+- Pandas
+- SciPy
+
+Research informing the project includes:
+
 - Cross, Acevedo, Hunter (2023) — Automated facial coding limitations
 - DISFA — Spontaneous facial action database
 - CASME II / SAMM — Microexpression datasets
