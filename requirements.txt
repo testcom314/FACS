@@ -1,0 +1,8 @@
+numpy
+opencv-python
+pandas
+matplotlib
+scipy
+PySide6
+py-feat
+xgboost

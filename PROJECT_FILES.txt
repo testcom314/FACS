@@ -1,0 +1,16 @@
+FACS Analysis Workstation
+
+FACS_Level2.py              Main application and analysis pipeline
+run.py                       Application entry point
+requirements.txt             Base dependencies
+requirements-cpu.txt         CPU PyTorch installation
+requirements-cuda130.txt     CUDA 13.0 PyTorch installation
+pyproject.toml               Project metadata and tool settings
+README.md                    Installation and usage
+TECHNICAL_DOCUMENTATION.md  Implementation details
+THEORY_AND_METHODS.md       Measurement and interpretation
+DATA_FORMAT.md              Output file and field structure
+VALIDATION.md                Internal and external validation plan
+DEVELOPMENT_HISTORY.md      Development record
+RESEARCH_NOTES.md            Literature and upstream references
+CONFIGURATION.md             Runtime parameters
