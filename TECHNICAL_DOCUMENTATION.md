@@ -1,173 +1,317 @@
 # Technical Documentation
 
-## 1. Purpose
+## 1. System overview
 
-The application is a local desktop workstation for extracting and reviewing facial action data from video. The core design goal is to retain the complete detector output while adding analysis that is useful for studying facial movement over time.
+The application is a PySide6 desktop workstation around Py-Feat Detectorv2. It processes webcam frames or prerecorded video, stores the detector outputs, maintains local face tracks, derives temporal features and writes a complete analysis session.
 
-The project grew from a small Py-Feat/OpenCV viewer into a larger analysis tool. The current source is deliberately kept as a single main Python module so the processing path can be followed without jumping through a large package hierarchy.
+The main implementation is currently concentrated in `FACS_Level2.py`. This is deliberate at the prototype stage: the processing path is easier to inspect while the analysis methods are still changing.
 
-## 2. Processing path
+## 2. Processing pipeline
 
-For each input frame the pipeline follows this order:
+```text
+Input frame
+    |
+    v
+RGB conversion / tensor preparation
+    |
+    v
+Py-Feat Detectorv2
+    |
+    +--> 20 AUs
+    +--> 7 emotion outputs
+    +--> valence / arousal
+    +--> head pose
+    +--> gaze
+    +--> 68 landmarks
+    +--> 478-point mesh
+    +--> blendshapes
+    |
+    v
+Face records
+    |
+    v
+MultiFaceTracker
+    |
+    v
+Measurement-quality assessment
+    |
+    +--> pose / gaze context
+    +--> face-size quality
+    +--> AU-specific quality
+    |
+    v
+Temporal processing
+    |
+    +--> smoothing
+    +--> baselines
+    +--> episodes
+    +--> rapid changes
+    +--> short bursts
+    +--> simultaneous activations
+    +--> coactivation
+    +--> transitions
+    +--> sequences
+    |
+    v
+Optional neutral-reference calibration
+    |
+    v
+Tracked video + CSV/JSON output
+```
 
-1. Read a frame from OpenCV.
-2. Convert the frame to the representation expected by Py-Feat.
-3. Run `Detectorv2` on the selected device.
-4. Extract face boxes and the available per-face outputs.
-5. Assign detections to visual tracks.
-6. Store raw AU, emotion, valence/arousal, pose, gaze, landmark, mesh and blendshape values.
-7. Calculate measurement-quality fields.
-8. Apply an optional neutral/reference calibration to derived fields.
-9. Update smoothed values and temporal AU state.
-10. Record events, episodes, interactions and sequences.
-11. Draw the review overlay and write the processed video.
-12. Write the session data when processing finishes.
+The raw detector measurements are kept alongside derived fields. Derived processing should never overwrite the original AU or emotion outputs.
 
-Raw detector values are not replaced by the later stages.
+## 3. Detector input
 
-## 3. Py-Feat integration
+Detectorv2 receives an RGB tensor in BCHW layout. The frame is converted from NumPy HWC representation to a contiguous PyTorch tensor and a batch dimension is added.
 
-The application uses `Detectorv2`, Py-Feat's multitask detector. Current Py-Feat documentation describes Detectorv2 as a single network that predicts 20 AUs, seven emotion classes, valence/arousal, gaze, head pose, 68-point landmarks, a 478-point 3D mesh and blendshapes. The exact available fields depend on the installed Py-Feat version.
+The application retains a disk-image fallback because some Py-Feat/PyTorch image-loading paths can reject a NumPy array even though the logical input is an image. If the tensor route fails for the known image-input failure modes, the frame can be written temporarily and passed through an image-compatible path.
 
-The installed Py-Feat version is written into the session metadata. This matters because model outputs and mesh model versions can change between releases.
-
-The optional identity branch is not used by this project. Track IDs are created from the face boxes over time and are not biometric identities.
+This fallback is recorded in the session summary as `fallback_disk_input`.
 
 ## 4. GPU selection
 
-The application checks CUDA availability and the device's compute capability before selecting CUDA. This was added because a CUDA-enabled PyTorch build can still fail when its compiled architecture list does not contain the installed GPU architecture. If CUDA cannot be used, the application falls back to CPU.
+The application checks CUDA availability and device information before processing. The current workstation was developed around an NVIDIA RTX 5060 Laptop GPU using a PyTorch build with CUDA 13.0 support for the GPU's architecture.
 
-The CUDA requirements file targets the PyTorch CUDA 13.0 build used during development. The CPU requirements file provides a separate installation path.
+The session records the selected device and GPU name. CPU fallback remains available.
 
-## 5. Tracking
+GPU availability is not assumed to mean that a particular PyTorch wheel contains a kernel for the installed GPU architecture. That distinction caused an earlier failure and is why device selection is explicit.
 
-The detector reports faces independently on each frame. Detection row order is not an identity guarantee, so the application maintains visual tracks.
+## 5. Tracking algorithm
 
-Tracking uses predicted box position, overlap, distance and size-change constraints. Track segments are intentionally treated as visual continuity rather than identity recognition. A person leaving the frame for long enough can receive a new track when they return.
+The tracker uses local geometric tracking rather than identity recognition.
 
-The UI calls these values `Track 1`, `Track 2`, etc. This avoids implying that the program knows who the person is.
+Conceptually:
 
-## 6. Measurement quality
+```python
+predictions = [predict_box(track) for track in active_tracks]
 
-A facial action estimate is more useful when the conditions under which it was measured are also recorded. The quality layer considers factors such as face size, tracking state and head pose.
+costs = build_cost_matrix(
+    predicted_boxes=predictions,
+    detections=detections,
+    iou_weight=..., 
+    distance_weight=...,
+    size_weight=...
+)
 
-Head pose is treated as a measurement-quality condition because facial action estimates can degrade as the face rotates away from the view used by the detector. Gaze is stored separately. Looking away is not automatically classified as an expression failure.
+matches = global_assignment(costs)
 
-Quality is available at the general measurement level and, where appropriate, at the AU region level. Eye-related AUs and mouth-related AUs can be affected differently by visibility and pose.
+for track, detection in matches:
+    track.update(detection)
+    track.update_velocity()
 
-The quality layer does not alter the raw detector output. It provides context for later analysis and filtering.
+for unmatched_track in unmatched_tracks:
+    unmatched_track.missing_frames += 1
 
-## 7. Emotion interpretation
-
-The detector returns probabilities for seven labels. The application records the complete probability vector rather than retaining only the largest class.
-
-The display also calculates the leading class, the second class and the separation between them. When the distribution is weak or closely split, the interface reports `Mixed / uncertain` rather than presenting the largest class as a definitive description.
-
-This is intentional. A classifier must select a class even when several facial actions are present at once. The UI should not turn that forced selection into a stronger claim than the underlying probabilities support.
-
-## 8. Calibration
-
-Calibration is a reference adjustment, not model retraining. A completed session can provide a neutral/reference profile from stable, high-quality frames.
-
-For each AU the profile stores a robust central value and a robust spread estimate. The implementation uses the median and median absolute deviation (MAD), with a minimum scale floor to prevent extremely small spreads from producing meaningless large standardized deviations.
-
-For pose and gaze, calibration stores a reference orientation and reports later differences from that reference.
-
-The raw AU values and raw emotion probabilities remain unchanged. Calibration fields are stored separately.
-
-## 9. Temporal AU analysis
-
-The temporal layer treats each AU as a time series rather than a collection of unrelated frames. It records activation and deactivation using separate thresholds. This hysteresis reduces repeated on/off switching when a value is close to the activation threshold.
-
-An episode contains:
-
-- person/track ID
-- AU
-- onset time and frame
-- peak time and frame
-- offset time and frame
-- baseline
-- peak value
-- amplitude
-- duration
-- rise rate
-- fall rate
-- rate validity flags
-- single-frame-peak information
-- measurement-quality information
-
-A rate is not reported when the time interval is too small. A one-frame peak can be real as a sampled observation, but its derivative cannot be treated as a reliable continuous-time rate.
-
-Episodes also have minimum duration and amplitude thresholds. These are intended to remove trivial detector jitter rather than claim that all short events are noise.
-
-## 10. Smoothing
-
-The live signal display uses exponential smoothing. Temporal analysis can also use Savitzky-Golay filtering when enough samples are available. Smoothed values are derived values; the raw detector series remains available.
-
-Derivatives are calculated only when the sampling interval is valid. Values are constrained to the detector's AU range after smoothing so filtering cannot introduce values outside the expected interval.
-
-## 11. Simultaneous AUs
-
-Several AUs can begin within the same frame or within a small timing tolerance. The sequence layer therefore groups near-simultaneous activations instead of forcing an arbitrary order between them.
-
-This matters because sorting same-frame events by dictionary or detector order would create an artificial temporal sequence.
-
-## 12. Coactivation
-
-Coactivation counts how often two AUs are active during the same valid observations. The export contains the AU pair and its count. The count is descriptive and depends on the duration, sampling rate and activation threshold of the session. It should not be interpreted as a general population association.
-
-## 13. Directed transitions
-
-A transition records one AU becoming active before another AU within a configured temporal window. The analysis stores the direction and delay. Same-frame activations are not treated as directional transitions.
-
-This allows questions such as whether AU A tends to precede AU B in one recording. It does not establish a causal relationship between the facial actions.
-
-## 14. Temporal clusters and sequences
-
-Nearby AU episodes can be grouped into local temporal clusters. A sequence contains a set of related episodes that occur within configured time gaps.
-
-Earlier versions grouped too much of a recording into one sequence. The current implementation uses shorter temporal gaps and onset timing so a long recording can contain multiple local sequences rather than one container spanning everything.
-
-Sequence analysis remains a derived layer and should be validated against manually annotated examples before being used as a research endpoint.
-
-## 15. Output architecture
-
-The project writes both individual files and a master file. The separate files make it easy to inspect or import one data type. `analysis.json` provides a single entry point for analysis scripts.
-
-The master structure is:
-
-```json
-{
-  "session_info": {},
-  "summary": {},
-  "frame_data": [],
-  "events": [],
-  "temporal_analysis": {}
-}
+for unmatched_detection in unmatched_detections:
+    create_track(unmatched_detection)
 ```
 
-The current schema version is 4 and the temporal analysis version is 4.3.
+The actual implementation uses predicted bounding boxes, geometric gates, velocity smoothing and global assignment when SciPy is available.
 
-## 16. Review interface
+Important tracker settings currently include:
 
-The main window contains live/processing information and separate analysis views. The current interface includes overview information, FACS values, face/mesh data, blendshapes, raw/events, graphs, temporal review and settings.
+```text
+maximum missing frames: 45
+minimum track hits: 2
+velocity alpha: 0.35
+minimum IoU gate: 0.02
+maximum normalized distance gate: 1.15
+maximum size-change gate: 0.65
+```
 
-Recorded sessions can be reopened without rerunning the detector. The review controls allow timeline scrubbing, frame stepping, track selection and navigation through temporal events.
+These are engineering parameters, not universal tracking constants.
 
-## 17. Internal validation
+## 6. Episode detection
 
-The application has a validation button that runs deterministic local tests against the temporal machinery. The tests cover the basic signal/episode logic and selected data handling paths. A JSON report is saved under `facs_output/validation/`.
+The temporal state is maintained independently for each local track.
 
-The internal tests are not a substitute for an external benchmark. A proper accuracy study requires videos with independent frame-level or event-level annotations.
+A simplified version of the logic is:
 
-## 18. Error handling
+```python
+value = current_AU_value
 
-The worker reports detection failures without silently replacing the entire analysis with fabricated values. CPU fallback is available for CUDA initialization failures. JSON export converts non-finite numeric values to `null` rather than emitting invalid JSON.
+if not active and value >= activation_threshold:
+    start_episode()
 
-The worker initializes dimensions before any quality calculation. This avoids a failure mode where the quality layer attempts to use `frame_width` or `frame_height` before the input stream has supplied them.
+elif active and value < deactivation_threshold:
+    close_episode()
 
-## 19. Performance
+elif active:
+    update_peak_if_needed()
+```
 
-Processing speed depends on video resolution, face count, GPU model, Py-Feat version and whether all mesh/blendshape outputs are being retained. Processing time and video time are stored separately. A run that takes 60 seconds to process a 14-second video is not a 60-second video.
+The actual implementation also uses recent history, smoothed values, timing checks and minimum episode requirements.
 
-The application reports processing timing so performance can be evaluated without confusing compute time with source-video duration.
+When an episode closes:
+
+```python
+amplitude = peak - baseline
+duration = offset_time - onset_time
+
+rise_dt = peak_time - onset_time
+fall_dt = offset_time - peak_time
+
+if rise_dt >= MIN_RATE_INTERVAL_SECONDS:
+    rise_rate = amplitude / rise_dt
+else:
+    rise_rate = None
+
+if fall_dt >= MIN_RATE_INTERVAL_SECONDS:
+    fall_rate = amplitude / fall_dt
+else:
+    fall_rate = None
+```
+
+This prevents single-frame peaks from generating meaningless numerical rates.
+
+## 7. Signal processing
+
+The application keeps raw AU values and creates smoothed values separately.
+
+Exponential smoothing is used for live per-person values:
+
+```text
+smooth_t = alpha * current_t + (1 - alpha) * smooth_(t-1)
+```
+
+The default smoothing factor is 0.35.
+
+The temporal pipeline can also use Savitzky-Golay filtering where SciPy is available. Peak detection support is included through SciPy's signal-processing functions.
+
+Smoothing is analysis-dependent. It is not presented as a correction to the detector.
+
+## 8. Measurement quality implementation
+
+The current face-level quality calculation uses:
+
+```text
+visibility =
+    0.45 * detector confidence
+  + 0.25 * face-size quality
+  + 0.20 * pose quality
+  + 0.10 * roll quality
+```
+
+The result is classified as:
+
+```text
+GOOD       >= 0.80
+FAIR       >= 0.60
+LIMITED    >= 0.40
+POOR       <  0.40
+```
+
+Pose quality uses soft and hard angular limits. Gaze is stored separately and produces a context category:
+
+```text
+CENTERED
+AVERTED
+STRONGLY_AVERTED
+```
+
+Eye-related AUs receive an AU-specific quality calculation that considers gaze. Mouth-related AUs are primarily affected by pose in the current model.
+
+## 9. Emotion interpretation layer
+
+The detector outputs are normalized before calculating secondary interpretation fields. The application then finds the highest and second-highest outputs and calculates their margin and entropy.
+
+```python
+margin = top - second
+```
+
+A small margin or high entropy produces `MIXED / AMBIGUOUS`.
+
+The raw emotion values are never replaced by the interpretation score.
+
+## 10. Calibration
+
+A calibration profile represents a reference condition. It can be loaded from the application's calibration file and is included in session metadata when active.
+
+The calibration layer calculates deviations from the reference and robust standardized values. It does not change the detector output.
+
+A calibration profile should therefore be considered part of the experimental setup. Changing the reference changes the meaning of calibrated deviations.
+
+## 11. Temporal interactions
+
+The interaction layer produces three main structures:
+
+```text
+activation_groups
+coactivation
+transitions
+```
+
+`activation_groups` preserves activations that occur within the configured simultaneous-frame tolerance.
+
+`coactivation` records pairs of AUs that are active together. The output includes overlap information and conditional measures where available.
+
+`transitions` records directed AU activation relationships and timing information. A transition is an observed temporal relationship, not a causal relationship.
+
+## 12. Sequences
+
+Sequences are built from temporally related AU activity. The current configuration distinguishes local clusters from longer sequences and uses gaps between activity to avoid treating an entire recording as one expression.
+
+The summary explicitly labels sequences as activity sequences rather than a single expression or emotion.
+
+## 13. Error handling
+
+Errors in frame processing are caught at the per-frame detection stage and reported through the GUI status signal. The rest of the session can continue when possible.
+
+Model initialization and overall worker failures are handled separately. Output writers and video captures are released in the worker's final cleanup path.
+
+Known detector input incompatibilities can trigger the disk-image fallback described above.
+
+A failure in metadata or derived analysis should not be confused with a failure of GPU inference. During development, for example, an undefined `FEAT_VERSION` variable caused analysis output to fail after processing logic had already been reached. That was a metadata bug, not a detector failure.
+
+## 14. Memory and storage
+
+The main memory cost is not just the video. Every detected face becomes a Python dictionary containing AU values, emotions, pose, gaze, landmarks, mesh coordinates and blendshapes. The 478-point mesh alone contributes 1,434 numeric fields when x/y/z are all retained.
+
+The application therefore stores large sessions in memory before writing the final analysis files. A long 1080p video with multiple faces can use substantially more RAM than the compressed source video size suggests.
+
+The exact RAM requirement depends on face count, frame count and the amount of data returned by the installed Py-Feat version. A fixed “10 minute at 1080p = X GB” figure would be misleading because the source resolution is not the main driver of the stored record size.
+
+For large experiments, splitting videos into shorter sessions is safer.
+
+GPU memory is primarily determined by the loaded Py-Feat model, PyTorch runtime and temporary tensors. It should be measured on the actual machine rather than documented as a fixed number.
+
+## 15. Output session
+
+A completed session contains:
+
+```text
+session_YYYY-MM-DD_HH-MM-SS/
+├── original.mp4
+├── tracked.mp4
+├── data.csv
+├── data.json
+├── events.csv
+├── episodes.csv
+├── sequences.csv
+├── coactivation.csv
+├── transitions.csv
+├── temporal_summary.json
+├── summary.json
+├── session_info.json
+└── analysis.json
+```
+
+`analysis.json` is the master file. The other files are retained because they are easier to inspect, process and import independently.
+
+## 16. Internal validation
+
+The application contains deterministic local validation tests. They test the analysis machinery rather than claiming detector accuracy.
+
+The current tests include:
+
+- tracker ID stability under crossing/dropped detections
+- no duplicate assignment within a frame
+- synthetic episode detection
+- sane rate limits
+- prevention of a giant continuous sequence
+- same-frame activation grouping
+- smoothed AU values staying inside the detector domain
+- separation of distant temporal sequences
+
+The validation code uses the same temporal classes and functions used by normal analysis. It does not maintain a simplified second implementation just for tests.

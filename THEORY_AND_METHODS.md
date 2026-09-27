@@ -2,162 +2,210 @@
 
 ## 1. What is being measured
 
-The central measurement in this project is the facial Action Unit (AU). An AU represents a visually defined facial action in the Facial Action Coding System. The application records detector estimates of AU activation and intensity over time.
+The application is built around facial Action Units (AUs) rather than treating an emotion label as the primary measurement.
 
-An AU is not an emotion. A detector can report several AUs simultaneously, and the same AU can occur in different contexts. The application therefore keeps AU measurements as the primary analysis layer and treats emotion probabilities as a separate model output.
+The current detector exposes 20 AUs:
 
-## 2. The 20 AUs
+`AU01, AU02, AU04, AU05, AU06, AU07, AU09, AU10, AU11, AU12, AU14, AU15, AU17, AU20, AU23, AU24, AU25, AU26, AU28, AU43`.
 
-The current Detectorv2 output used by the application includes:
+The AU values are continuous outputs from the trained detector. They are not manually coded FACS intensity scores and should not be described as ground-truth measurements. A value such as `AU01 = 0.72` means that the detector produced a value of 0.72 for AU01 in that frame. The number should be treated as a model output on the detector's numerical scale, not automatically as “72% certainty” or “72% muscle activation.”
 
-| AU | Action |
-|---|---|
-| AU01 | Inner Brow Raiser |
-| AU02 | Outer Brow Raiser |
-| AU04 | Brow Lowerer |
-| AU05 | Upper Lid Raiser |
-| AU06 | Cheek Raiser |
-| AU07 | Lid Tightener |
-| AU09 | Nose Wrinkler |
-| AU10 | Upper Lip Raiser |
-| AU11 | Nasolabial Deepener |
-| AU12 | Lip Corner Puller |
-| AU14 | Dimpler |
-| AU15 | Lip Corner Depressor |
-| AU17 | Chin Raiser |
-| AU20 | Lip Stretcher |
-| AU23 | Lip Tightener |
-| AU24 | Lip Pressor |
-| AU25 | Lips Part |
-| AU26 | Jaw Drop |
-| AU28 | Lip Suck |
-| AU43 | Eyes Closed |
+The application also records seven emotion outputs, valence, arousal, head pose, gaze, 68 landmark coordinates, a 478-point face mesh and available blendshape outputs.
 
-The detector also returns seven emotion probabilities, valence/arousal, pose, gaze, landmarks, mesh and blendshapes.
+Keeping these measurements separate is intentional. An emotion classifier can summarize several facial actions into one label, while the AU layer preserves more of the observable information.
 
-## 3. Why the project does not treat emotion labels as ground truth
+## 2. Facial Action Coding System
 
-A facial expression recognition model can map facial observations to emotion categories, but the category is a model output rather than a direct reading of subjective experience. Research on automated facial coding has repeatedly highlighted validity, reliability in natural conditions and the theoretical assumptions involved in converting facial movement into emotion labels.
+FACS describes visible facial movement using Action Units. Examples include AU01 (Inner Brow Raiser), AU06 (Cheek Raiser), AU12 (Lip Corner Puller), AU25 (Lips Part) and AU43 (Eyes Closed).
 
-For this reason the application keeps the full probability distribution and displays ambiguity. A frame can contain a combination of facial actions that does not fit cleanly into one of seven labels.
+The software uses the detector's AU outputs as the starting signal and then performs temporal analysis on those signals. It does not claim to replace a trained human FACS coder.
 
-## 4. Temporal information
+## 3. Why emotion labels are not treated as ground truth
 
-A single frame cannot describe how a facial action developed. The temporal layer therefore uses four useful landmarks:
+The seven emotion outputs are useful as model estimates, but they are not an independent measurement of a person's internal emotional state.
 
-- onset: the action begins to cross the activation condition
-- peak/apex: the strongest observed point in the episode
-- offset: the action falls below the deactivation condition
-- duration: elapsed time from onset to offset
+For example, a frame could produce something like:
 
-The project also records amplitude, rise rate and fall rate when the sampling interval supports those calculations.
+```text
+Happy     0.45
+Surprise  0.30
+Fear      0.15
+Other     0.10
+```
 
-This is closer to the way dynamic facial behavior is normally studied than simply counting positive frames. Timing, speed, amplitude and irregularity can contain information that an average AU value loses.
+The interface can show Happy as the highest model output while still exposing the other probabilities, the top-two margin and an ambiguity status. This avoids turning a close classification into a false statement such as “the person is happy.”
+
+The same principle applies to temporal analysis. A rapid AU change is a property of the recorded signal. It is not evidence by itself of a microexpression, deception, sincerity or a particular emotion.
+
+## 4. Temporal analysis
+
+A single frame is often less informative than the way an AU changes over time. The application therefore records onset, peak and offset information when an AU forms a valid episode.
+
+An episode can contain:
+
+- onset time and frame
+- peak time and frame
+- offset time and frame
+- baseline
+- peak value
+- amplitude
+- duration
+- rise rate when the timing interval is long enough to support it
+- fall rate when the timing interval is long enough to support it
+- validity flags
+- single-frame peak information
+
+The current implementation also records rapid changes, short bursts, simultaneous AU activation, coactivation and directed transitions.
 
 ## 5. Hysteresis
 
-Two thresholds are used instead of one. An AU must reach the activation threshold to start an episode, but it can remain active until it falls below a lower deactivation threshold.
+Episode detection uses separate activation and deactivation thresholds. This prevents an AU that is hovering around one threshold from repeatedly switching between active and inactive.
 
-Without hysteresis, a noisy signal near a single threshold can produce a sequence such as:
+Conceptually:
 
 ```text
-active -> inactive -> active -> inactive -> active
+if AU_value >= activation_threshold:
+    active = True
+elif AU_value < deactivation_threshold:
+    active = False
+# otherwise keep the previous state
 ```
 
-without a meaningful change in the face. Hysteresis reduces this switching.
+The default activation threshold is 0.15. The deactivation threshold is the activation threshold minus 0.03, subject to a lower bound in the implementation.
+
+This is signal-state hysteresis. It is not a claim that 0.15 is a universal FACS threshold.
 
 ## 6. Rates and short events
 
-A common mistake in frame-based analysis is to calculate a derivative across a single frame interval and interpret the resulting large number as a meaningful movement speed. At 30 FPS, a one-frame interval is about 33.3 ms. A small numerical change divided by that interval can produce a very large value.
+A rate is calculated from a change in AU value divided by the elapsed time. The timing interval must be long enough for the result to be meaningful.
 
-The implementation therefore marks rates invalid when the time interval is too short. One-frame peaks are retained as observations, but they are not presented as reliable continuous-time rates.
+At 30 FPS, one frame is approximately 33.3 ms. If an AU rises from 0.1 to 0.9 in one frame, the numerical slope is about 24 units/s. The application does not treat a one-frame rise as a reliable temporal rate. The current minimum rate interval is two frames, approximately 66.7 ms at 30 FPS.
 
-This distinction is especially important for discussions of microexpressions. A short detector event is not automatically a microexpression. Microexpression datasets such as CASME II and SAMM use high-speed video and explicit onset/apex/offset annotations. Ordinary 30 FPS video has much less temporal resolution.
+When the interval is too short, `rise_rate` or `fall_rate` is stored as `null` and the corresponding validity flag is false. This prevents the earlier failure mode where a nearly zero denominator produced absurd values such as tens of thousands of units per second.
 
-## 7. Baseline and calibration
+High-speed microexpression datasets such as CASME II use much finer temporal sampling, commonly around 200 FPS. A 30 FPS webcam or ordinary video therefore cannot provide the same temporal resolution.
 
-A raw AU value is useful, but a reference level can help describe change within a session. The calibration layer estimates a neutral/reference baseline from stable frames. Median and MAD are used because they are less sensitive to a few unusually expressive frames than a simple mean and standard deviation.
+## 7. Baselines and calibration
 
-For an AU value x, the derived quantities are conceptually:
+Two ideas are kept separate:
+
+1. A rolling baseline used by temporal analysis.
+2. An optional neutral reference calibration profile.
+
+The rolling baseline is intended to describe recent signal level. The current implementation uses a robust median over a bounded history, with a minimum number of samples before treating the estimate as established.
+
+Calibration is reference normalization. It does not retrain Py-Feat, alter the detector weights or turn the application into a personalized emotion classifier.
+
+A calibrated value can therefore be interpreted as a deviation from the person's recorded reference condition. It should not be interpreted as an absolute physiological measurement.
+
+Median Absolute Deviation (MAD) is used for robust spread estimation. A scale floor prevents extremely small variation around the baseline from producing enormous normalized values.
+
+## 8. Head pose and gaze
+
+Head pose is treated as a measurement-condition variable. The application records pitch, yaw and roll and derives a pose magnitude used in quality scoring.
+
+The application does not “correct” the AU values by mathematically forcing a rotated face to look frontal. That would create a second model layered on top of the detector without validation.
+
+Gaze is recorded separately. Looking away is not itself an expression failure, so gaze is used as context and affects AU-specific observability differently by facial region.
+
+The current quality model gives eye-related AUs more sensitivity to gaze than mouth-related AUs.
+
+## 9. Measurement quality
+
+The quality score is intended to answer:
+
+> How observable and usable was this face measurement under the recorded conditions?
+
+It combines detector confidence, approximate face size, head-pose quality and roll quality. The current weighting is:
 
 ```text
-deviation = x - median_baseline
-robust_deviation = deviation / max(scale, minimum_scale)
+45% face confidence
+25% face size
+20% pitch/yaw pose quality
+10% roll quality
 ```
 
-The minimum scale prevents an almost constant AU from producing enormous standardized values because the estimated spread is nearly zero.
+The resulting categories are `GOOD`, `FAIR`, `LIMITED` and `POOR`.
 
-Calibration does not modify the detector's raw output.
+This score is not an accuracy estimate. A `GOOD` frame is not proof that the AU values are correct. It simply means the recorded conditions satisfy the application's measurement-quality heuristics more closely.
 
-## 8. Pose and gaze
+## 10. Emotion interpretation quality
 
-Head pose and gaze answer different questions. Head pose describes the orientation of the face relative to the camera. Gaze describes the direction of the eyes.
+The raw emotion outputs are preserved. A separate interpretation layer calculates:
 
-Head rotation can make some facial actions harder to measure because parts of the face become less visible or depart from the conditions represented in training data. The project therefore uses pose as a measurement-quality input.
+- top emotion
+- top probability/output
+- second emotion
+- second probability/output
+- top-two margin
+- normalized entropy
+- interpretation score
+- interpretation status
+- top three outputs
 
-Gaze is retained as its own signal. Looking down or to the side is not automatically treated as an expression error. The resulting analysis can therefore distinguish:
+If the top two outputs are close or the distribution is sufficiently spread out, the status becomes `MIXED / AMBIGUOUS`.
+
+This is deliberately different from modifying the detector probabilities. The raw values remain untouched.
+
+## 11. Tracking
+
+Detector output order cannot be assumed to represent stable identity across frames. The application therefore assigns local track IDs using face-box geometry and motion prediction.
+
+A track ID means:
 
 ```text
-facial action estimate
-measurement conditions
-gaze direction
+Track 1
+Track 2
+Track 3
 ```
 
-## 9. Coactivation
+It does not mean a recognized person. Identity recognition is disabled.
 
-Facial actions commonly occur together. Coactivation counts simultaneous valid activation of AU pairs. The result is a within-session description. It is not a normative statement about how AUs should combine in a population.
+The tracker predicts bounding-box position, computes matching costs from geometry, performs global assignment when SciPy's assignment routine is available, updates motion state and creates or retires tracks as needed.
 
-Counts also depend on the length of the recording and activation threshold, so comparisons between sessions should use normalized measures or matched recording conditions.
+A track can still be wrong. The output should therefore be treated as a tracking hypothesis, not biometric identity.
 
-## 10. Transitions
+## 12. Coactivation and transitions
 
-A directed transition A -> B is recorded when A activates before B within a configured window. The delay is measured from the activation times.
+Coactivation asks which AUs tend to be active during the same frames. Raw overlap counts alone can be misleading because a frequently active AU will overlap with many other AUs simply by being common.
 
-A same-frame activation is simultaneous, not A -> B. Assigning an arbitrary order would create information that was never observed.
+The application therefore records additional conditional and overlap information where available.
 
-Transitions should be treated as temporal associations, not causes.
+Transitions are directed temporal relationships. For example:
 
-## 11. Sequences
+```text
+AU07 -> AU15
+```
 
-Sequences are collections of nearby AU episodes. They are useful for finding local periods of facial activity, but sequence segmentation is a design choice rather than a property that the detector directly provides.
+means that AU07 activation was followed by AU15 activation within the configured transition window. It does not mean AU07 caused AU15.
 
-The current implementation uses local time gaps and onset timing. Long recordings can therefore contain multiple sequences. Sequence segmentation remains a candidate area for comparison with manually annotated data.
+Activations detected within the same-frame tolerance are grouped as simultaneous rather than being assigned an arbitrary order.
 
-## 12. Genuine versus posed expressions
+## 13. Temporal sequences
 
-The project originally included the question of whether dynamic facial analysis could help distinguish genuine from deliberately produced expressions. The answer is more limited than a simple classifier suggests.
+A sequence is a local period of facial-action activity assembled from temporally related AU events. It is not automatically an “expression” and it is not an emotion episode.
 
-Onset timing, duration, peak intensity, rise/fall speed, AU combinations and temporal irregularity can be useful variables when comparing labeled spontaneous and posed material. They are not, by themselves, a reliable truthfulness detector.
+This distinction matters because a person can keep one AU active while other actions appear and disappear. A naive sequence algorithm can then merge most of a recording into one giant event. The current implementation explicitly tests against that failure mode.
 
-A defensible experiment would require independent labels, subject-independent train/test splits and a dataset containing spontaneous and posed examples. The current application does not claim to perform that classification.
+## 14. Microexpressions and genuine expressions
 
-## 13. Validation strategy
+The project does not claim to determine whether somebody is lying, faking an emotion or experiencing a particular internal state.
 
-There are three useful levels of validation:
+Microexpression research is concerned with very short, often subtle facial events and their temporal structure. A conventional 30 FPS recording provides roughly 33 ms between frames, so short events can be undersampled or represented by only one or two frames.
 
-### Signal-level tests
+Likewise, spontaneous versus posed expression analysis requires appropriately labeled data and subject-independent validation. The current application provides temporal measurements that could be used for such research, but it does not contain a validated “genuine” score.
 
-Generate known synthetic AU-like signals and check whether onset, peak, offset, duration and rate calculations recover the known values within tolerance.
+## 15. Research basis
 
-### Annotation-level tests
+The design was influenced by work on automated facial coding, temporal facial expression analysis, FACS event detection, AU intensity measurement and microexpression spotting.
 
-Compare detected events against human FACS annotations. Event-level measures should include interval overlap and timing agreement rather than relying only on frame-level binary accuracy.
+Useful starting points include:
 
-### Cross-dataset tests
+- Cross et al. (2023), *A Critique of Automated Approaches to Code Facial Expressions: What Do Researchers Need to Know?*
+  https://pmc.ncbi.nlm.nih.gov/articles/PMC10514002/
+- Valstar et al. work on temporal phases of facial action units.
+- DISFA and DISFA+ for spontaneous and intensity-labelled AU data.
+- CASME II, SAMM and SMIC for high-speed microexpression research.
+- SciPy signal-processing documentation for smoothing and peak detection.
 
-A model or threshold that works on one recording condition can behave differently elsewhere. DISFA provides spontaneous facial-action intensity annotations, while datasets such as CASME II and SAMM provide high-speed micro-expression timing annotations. These are useful for testing different parts of the pipeline.
-
-## 14. Limitations
-
-The following are known limitations rather than hidden assumptions:
-
-- Detector outputs inherit the limitations of the pretrained Py-Feat model.
-- Camera angle, lighting, occlusion and face size can affect measurement quality.
-- A visual track is not a biometric identity.
-- Seven emotion categories cannot represent every possible facial configuration.
-- A short event in a normal-speed video is not automatically a microexpression.
-- Coactivation counts are recording-dependent.
-- Sequence segmentation is heuristic and requires external validation.
-- Calibration is a reference normalization step, not model personalization.
-- Internal tests verify software behavior, not scientific accuracy.
-- Facial measurements alone do not provide access to private mental states.
+These sources are used to motivate the measurement and validation design, not to imply that this application has reproduced their reported accuracy.

@@ -1,54 +1,66 @@
 # Research Notes
 
-These notes record the external material used to shape the analysis design. They are included so the project decisions can be traced to published work and upstream documentation rather than appearing as arbitrary thresholds.
+This file records the research that influenced the design. It is not an accuracy claim for the application.
 
-## Py-Feat
+## Automated facial coding
 
-Py-Feat's current documentation describes Detectorv2 as a multitask detector producing 20 AUs, seven emotion classes, valence/arousal, gaze, head pose, a 478-point 3D mesh and blendshapes. The video tutorial also describes frame-by-frame and batched video processing.
+Cross et al. (2023), *A Critique of Automated Approaches to Code Facial Expressions: What Do Researchers Need to Know?*
 
-- Py-Feat image detection: https://py-feat.org/basic_tutorials/Detecting_Images/
-- Py-Feat video detection: https://py-feat.org/basic_tutorials/Detecting_Videos/
-- Py-Feat model overview: https://py-feat.org/pages/models/
+https://pmc.ncbi.nlm.nih.gov/articles/PMC10514002/
 
-## Automated facial coding limitations
+This work is useful for understanding the distinction between automated facial measurements and psychological interpretation. It is one reason the project keeps AU measurements separate from emotion labels and avoids treating automated output as ground truth.
 
-Cross, Acevedo and Hunter (2023) discuss validity, reliability under non-ideal conditions and the theoretical assumptions involved in automated facial coding. A major point relevant to this project is that facial movement measurements and inferred emotion labels should not be treated as the same thing.
+## Dynamic emotion expression
 
-The paper also discusses problems caused by lighting, pose, occlusion and other conditions that differ from controlled datasets. These concerns are the reason the project stores measurement-quality fields instead of silently treating every frame as equally reliable.
+Research on dynamic facial expression emphasizes that timing, speed, duration and amplitude can carry information that is lost in a single still image.
 
-Source: https://pmc.ncbi.nlm.nih.gov/articles/PMC10514002/
-
-## DISFA
-
-DISFA is a spontaneous facial-action database in which each video frame was manually coded for AU presence, absence and intensity. It is a useful reference for evaluating AU intensity and frame-level measurements against independent human coding.
-
-Source: https://ieeexplore.ieee.org/document/6475933
+This motivates the project's onset/peak/offset and temporal-analysis layers.
 
 ## Microexpression datasets
 
-CASME II and SAMM use high-speed recordings and provide onset/apex/offset annotations for microexpression samples. Their temporal resolution is substantially higher than ordinary 30 FPS video. This is one reason the project does not label every short 30 FPS AU episode as a microexpression.
+CASME II:
 
-CASME II: https://doi.org/10.1007/s11042-013-1647-6
+https://facedb.seu.edu.cn/TopFolder/Database/casme2.html
 
-SAMM: https://doi.org/10.1007/s11042-016-3594-1
+CASME II contains high-speed facial recordings with temporal annotations such as onset, apex and offset. Its frame rate is substantially higher than ordinary webcam video, which is important when discussing very short facial events.
+
+SAMM and SMIC are additional microexpression datasets commonly used for temporal facial-expression research.
+
+## DISFA
+
+DISFA provides spontaneous facial behavior with frame-level AU annotations and intensity information.
+
+https://www.cs.rochester.edu/u/qyou/face/DISFA/
+
+It is a useful reference for AU validation because it provides human-coded labels rather than relying on another automated detector as the ground truth.
+
+## FACS
+
+The Facial Action Coding System defines Action Units and their appearance criteria. The project uses the FACS vocabulary for labeling detector outputs but does not claim that the continuous detector value is equivalent to a trained coder's ordinal FACS intensity score.
+
+## Temporal AU detection
+
+Research on temporal AU detection has used explicit onset/apex/offset phases and models such as HMMs. Other work uses optical flow, local appearance descriptors and temporal sequence models.
+
+These approaches are relevant to future versions of the project, but the current implementation remains a deterministic signal-processing system rather than an HMM or learned temporal model.
 
 ## Signal processing
 
-Savitzky-Golay filtering and peak detection are standard tools for smoothing and locating structure in sampled signals. The project uses these ideas for derived temporal analysis while preserving the unsmoothed detector values.
+SciPy's signal-processing tools are used for smoothing and peak analysis where appropriate:
 
-SciPy signal filtering: https://docs.scipy.org/doc/scipy/reference/signal.html
+https://docs.scipy.org/doc/scipy/reference/signal.html
 
-## Design consequences
+In particular, the project uses Savitzky-Golay filtering and peak-detection functionality when available.
 
-The research led to several concrete implementation choices:
+## Interpretation limits
 
-1. Keep AU values as the primary data layer.
-2. Keep emotion probabilities instead of only the top class.
-3. Store pose and gaze separately from expression.
-4. Record quality alongside measurements.
-5. Use onset/peak/offset rather than only frame counts.
-6. Reject or flag mathematically unstable rate estimates.
-7. Treat same-frame AUs as simultaneous.
-8. Treat transitions as temporal associations, not causes.
-9. Do not call short 30 FPS events microexpressions without suitable evidence.
-10. Require independent annotation for claims about accuracy or genuine/posed classification.
+The following claims are deliberately outside the scope of the current software:
+
+- detecting lies
+- determining whether an expression is “real” with a single score
+- determining internal emotional state from a face alone
+- diagnosing psychological or medical conditions
+- treating an emotion classifier's top label as ground truth
+- calling every rapid facial change a microexpression
+
+These limitations are part of the design rather than disclaimers added after the fact.

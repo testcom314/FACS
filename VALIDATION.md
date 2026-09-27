@@ -1,71 +1,133 @@
 # Validation
 
-## Internal validation
+## 1. What internal validation means
 
-The application contains an `Run internal validation tests` button. It runs deterministic checks against the temporal processing code and writes:
+The internal validation system checks whether the application's own analysis logic behaves as intended. It does not measure Py-Feat's facial-expression accuracy.
 
-```text
-facs_output/validation/validation_report.json
+A passing synthetic episode test means the episode code can recover a known synthetic pattern. It does not mean the detector will recover every real human expression.
+
+## 2. Running internal validation
+
+The application exposes internal validation through the GUI. The report is written as JSON under the application's validation output when the validation action is used.
+
+The report has this general structure:
+
+```json
+{
+  "schema_version": 1,
+  "total": 8,
+  "passed": 8,
+  "failed": 0,
+  "results": [
+    {
+      "name": "tracker keeps IDs bounded",
+      "passed": true,
+      "detail": "..."
+    }
+  ]
+}
 ```
 
-The report contains the number of tests, passed tests, failed tests and individual results.
+The exact number of tests can change as the implementation changes. Do not hard-code a requirement such as “11/12 means accurate.” The useful question is whether all current deterministic logic tests pass.
 
-The validation path is kept inside the application so it exercises the same worker methods used by normal analysis instead of maintaining a second simplified implementation.
+## 3. Current internal tests
 
-## What should be tested
+The validation code currently exercises:
 
-### 1. Episode timing
+1. Tracker ID bounds during crossing faces and a short detector dropout.
+2. No duplicate assignment within a frame.
+3. Detection of a synthetic AU12 episode.
+4. Sane rise/fall rates.
+5. Prevention of a giant sequence caused by continuous activity.
+6. Same-frame activation grouping.
+7. Smoothed AUs remaining in the detector's 0–1 domain.
+8. Separation of distant temporal events.
 
-Use synthetic signals with known onset, peak and offset locations. Confirm that the detected episode falls within the expected tolerance.
+The synthetic data is generated inside the application. No network connection is required for these checks.
 
-### 2. Hysteresis
+## 4. What internal validation cannot prove
 
-Use a signal that oscillates around the activation threshold. Confirm that it does not create a large number of artificial on/off events.
+It cannot prove:
 
-### 3. Rate handling
+- AU accuracy against human FACS coding
+- emotion recognition accuracy
+- cross-camera robustness
+- demographic robustness
+- genuine versus posed expression classification
+- microexpression detection accuracy
+- causal relationships between AUs
 
-Test both normal multi-frame rises and single-frame peaks. Normal intervals should produce rates; intervals below the configured minimum should be marked invalid rather than producing enormous values.
+Those require external datasets and independent evaluation.
 
-### 4. Baseline stability
+## 5. External AU validation
 
-Test a mostly constant signal with a short outlier. The median/MAD baseline should remain close to the stable part of the signal.
+A proper external study should use frame-level human annotations such as DISFA/DISFA+ or another dataset with appropriate AU labels.
 
-### 5. Simultaneous activation
+Possible measurements include:
 
-Start two or more AUs on the same frame. The output should keep them simultaneous instead of inventing an ordering.
+- AU presence agreement
+- AU intensity correlation where compatible labels exist
+- temporal onset/offset agreement
+- event-level precision and recall
+- agreement across subjects not used for tuning
 
-### 6. Transition direction
+Class imbalance should be considered. A single frame-level F1 number can hide important differences between common and rare AU events.
 
-Create A -> B and B -> A examples with known delays. Confirm that the direction and delay are preserved.
+## 6. Temporal validation
 
-### 7. Tracking
+For onset/apex/offset work, datasets with explicit temporal annotations such as CASME II and SAMM are useful references.
 
-Use known moving boxes or a recorded multi-face clip. Check that continuous faces retain their track and that a track is not silently treated as a permanent identity.
+A sensible test is:
 
-### 8. JSON validity
+```text
+annotated onset / apex / offset
+             |
+             v
+run the same video through the application
+             |
+             v
+compare detected episode intervals
+```
 
-Export records containing NaN or infinity internally and verify that the resulting JSON contains `null` rather than invalid numeric tokens.
+For high-speed datasets, compare the detector's temporal resolution with the source frame rate before interpreting errors.
 
-### 9. Calibration
+Downsampling a 200 FPS dataset to 30 FPS changes the problem. It should be treated as a separate experiment, not as equivalent data.
 
-Create a profile from stable frames and verify that raw AU and emotion values are unchanged while calibration fields are added.
+## 7. Manual spot checks
 
-### 10. Pose quality
+A simple practical validation method is to select short clips and manually inspect the corresponding frames and AU curves.
 
-Use frontal and rotated examples and verify that quality fields respond to pose while gaze remains a separate signal.
+For each selected event:
 
-## External validation
+1. Watch the original video.
+2. Locate the relevant frame interval.
+3. Inspect raw AU values.
+4. Inspect smoothed values.
+5. Check the episode onset, peak and offset.
+6. Check measurement quality and pose.
+7. Compare the tracked face against the video.
 
-Internal tests only establish that the software behaves as designed. They do not establish detector accuracy.
+This is not a replacement for a formal benchmark, but it is useful for finding implementation errors.
 
-A research-grade evaluation should use independent annotations. DISFA contains frame-level manual presence/absence/intensity coding for spontaneous facial action. CASME II and SAMM provide high-speed micro-expression recordings with onset, apex and offset annotations. These datasets address different questions and should not be treated as interchangeable benchmarks.
+## 8. Reproducibility
 
-For event detection, interval overlap and timing agreement are more informative than a simple frame-level F1 score when the objective is to find temporal episodes.
+A validation run should record:
 
-## Current known validation gaps
+- Python version
+- Py-Feat version
+- PyTorch version
+- CUDA version
+- GPU
+- video frame rate
+- video resolution
+- analysis settings
+- schema version
+- temporal-analysis version
 
-- No claim of scientific accuracy is made from the built-in tests.
-- The current project has not been calibrated against a human-coded dataset in this package.
-- Cross-camera and cross-dataset performance has not been established.
-- Genuine-versus-posed expression classification is not implemented or validated.
-- The normal project video rate is not sufficient by itself for microexpression claims.
+The application stores many of these values in session metadata.
+
+## 9. Known gaps
+
+The project still needs independent validation against human-coded data before numerical accuracy claims should be made.
+
+In particular, there is currently no validated classifier for “genuine” versus “posed” expression and no basis for using the application as a lie detector.
