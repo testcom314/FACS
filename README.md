@@ -1,7 +1,7 @@
 # FACS Analysis Workstation
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/license-MIT-brightgreen?style=flat-square)](LICENSE)
 [![Code style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 A desktop workstation for analyzing facial action units from video and webcam using Py-Feat Detectorv2. Designed for research and technical experimentation in facial expression measurement, temporal dynamics, and measurement quality assessment.
